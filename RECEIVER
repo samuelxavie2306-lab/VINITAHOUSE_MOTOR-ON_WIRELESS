@@ -1,0 +1,253 @@
+#define BLYNK_TEMPLATE_ID "TMPL3-Bzx3_Rl"
+#define BLYNK_TEMPLATE_NAME "MOTOR CONTROL"
+#define BLYNK_AUTH_TOKEN "F-kF0mi9Kbbqb8-fs6wyxEa9NVMEpYEt"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <SPI.h>
+#include <LoRa.h>
+
+char ssid[] = "Airtel_xavi_9172";
+char pass[] = "air86274";
+
+#define LORA_SS     5
+#define LORA_RST    14
+#define LORA_DIO0   2
+#define LORA_FREQ   433E6
+
+#define GOOD_RELAY 26
+#define SALT_RELAY 27
+
+#define RELAY_ON  LOW
+#define RELAY_OFF HIGH
+
+#define MOTOR_ON_LEVEL   30
+#define MOTOR_OFF_LEVEL  95
+
+#define VPIN_SALT_SWITCH     V0
+#define VPIN_GOOD_SWITCH     V1
+#define VPIN_MODE            V2
+#define VPIN_SALT_STATUS     V3
+#define VPIN_GOOD_STATUS     V4
+#define VPIN_GOOD_LEVEL      V5
+#define VPIN_SALT_LEVEL      V6
+
+BlynkTimer timer;
+
+int goodLevel = 0;
+int saltLevel = 0;
+
+bool autoMode = true;
+bool goodMotor = false;
+bool saltMotor = false;
+
+unsigned long lastPacketTime = 0;
+
+void connectWiFi()
+{
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi Connected");
+}
+
+void connectLoRa()
+{
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+  if (!LoRa.begin(LORA_FREQ))
+  {
+    Serial.println("LoRa Failed");
+    while (1);
+  }
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.enableCrc();
+  Serial.println("LoRa Ready");
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(GOOD_RELAY, OUTPUT);
+  pinMode(SALT_RELAY, OUTPUT);
+
+  digitalWrite(GOOD_RELAY, RELAY_OFF);
+  digitalWrite(SALT_RELAY, RELAY_OFF);
+
+  connectWiFi();
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  connectLoRa();
+
+  Serial.println("Receiver Started");
+}
+
+BLYNK_WRITE(VPIN_SALT_SWITCH)
+{
+  if (!autoMode)
+  {
+    bool request = param.asInt();
+    if(request && saltLevel >= MOTOR_OFF_LEVEL) {
+      saltMotor = false;
+      digitalWrite(SALT_RELAY, RELAY_OFF);
+      Blynk.virtualWrite(VPIN_SALT_SWITCH, 0);
+      Blynk.virtualWrite(VPIN_SALT_STATUS, 0);
+    } else {
+      saltMotor = request;
+      digitalWrite(SALT_RELAY, saltMotor ? RELAY_ON : RELAY_OFF);
+      Blynk.virtualWrite(VPIN_SALT_STATUS, saltMotor);
+    }
+  }
+}
+
+BLYNK_WRITE(VPIN_GOOD_SWITCH)
+{
+  if (!autoMode)
+  {
+    bool request = param.asInt();
+    if(request && goodLevel >= MOTOR_OFF_LEVEL) {
+      goodMotor = false;
+      digitalWrite(GOOD_RELAY, RELAY_OFF);
+      Blynk.virtualWrite(VPIN_GOOD_SWITCH, 0);
+      Blynk.virtualWrite(VPIN_GOOD_STATUS, 0);
+    } else {
+      goodMotor = request;
+      digitalWrite(GOOD_RELAY, goodMotor ? RELAY_ON : RELAY_OFF);
+      Blynk.virtualWrite(VPIN_GOOD_STATUS, goodMotor);
+    }
+  }
+}
+
+BLYNK_WRITE(VPIN_MODE)
+{
+  autoMode = param.asInt();
+  if(autoMode) {
+      Blynk.virtualWrite(VPIN_GOOD_SWITCH, goodMotor);
+      Blynk.virtualWrite(VPIN_SALT_SWITCH, saltMotor);
+      Blynk.virtualWrite(VPIN_GOOD_STATUS, goodMotor);
+      Blynk.virtualWrite(VPIN_SALT_STATUS, saltMotor);
+  } else {
+      goodMotor = false;
+      saltMotor = false;
+      digitalWrite(GOOD_RELAY, RELAY_OFF);
+      digitalWrite(SALT_RELAY, RELAY_OFF);
+      Blynk.virtualWrite(VPIN_GOOD_SWITCH, 0);
+      Blynk.virtualWrite(VPIN_SALT_SWITCH, 0);
+      Blynk.virtualWrite(VPIN_GOOD_STATUS, 0);
+      Blynk.virtualWrite(VPIN_SALT_STATUS, 0);
+  }
+}
+
+void receiveLoRa()
+{
+  int packetSize = LoRa.parsePacket();
+  if(packetSize)
+  {
+    String data = "";
+    while(LoRa.available())
+    {
+      data += (char)LoRa.read();
+    }
+    lastPacketTime = millis();
+
+    int comma = data.indexOf(',');
+    if(comma > 0)
+    {
+      goodLevel = data.substring(0, comma).toInt();
+      saltLevel = data.substring(comma + 1).toInt();
+
+      Blynk.virtualWrite(VPIN_GOOD_LEVEL, goodLevel);
+      Blynk.virtualWrite(VPIN_SALT_LEVEL, saltLevel);
+    }
+  }
+}
+
+void autoControl()
+{
+  if(!autoMode) return;
+
+  if(goodLevel <= MOTOR_ON_LEVEL) {
+    goodMotor = true;
+    digitalWrite(GOOD_RELAY, RELAY_ON);
+  }
+  if(goodLevel >= MOTOR_OFF_LEVEL) {
+    goodMotor = false;
+    digitalWrite(GOOD_RELAY, RELAY_OFF);
+  }
+
+  if(saltLevel <= MOTOR_ON_LEVEL) {
+    saltMotor = true;
+    digitalWrite(SALT_RELAY, RELAY_ON);
+  }
+  if(saltLevel >= MOTOR_OFF_LEVEL) {
+    saltMotor = false;
+    digitalWrite(SALT_RELAY, RELAY_OFF);
+  }
+
+  Blynk.virtualWrite(VPIN_GOOD_STATUS, goodMotor);
+  Blynk.virtualWrite(VPIN_SALT_STATUS, saltMotor);
+  Blynk.virtualWrite(VPIN_GOOD_SWITCH, goodMotor);
+  Blynk.virtualWrite(VPIN_SALT_SWITCH, saltMotor);
+}
+
+void manualSafetyControl()
+{
+  if(autoMode) return;
+
+  if(goodMotor && goodLevel >= MOTOR_OFF_LEVEL) {
+    goodMotor = false;
+    digitalWrite(GOOD_RELAY, RELAY_OFF);
+    Blynk.virtualWrite(VPIN_GOOD_SWITCH, 0);
+    Blynk.virtualWrite(VPIN_GOOD_STATUS, 0);
+  }
+
+  if(saltMotor && saltLevel >= MOTOR_OFF_LEVEL) {
+    saltMotor = false;
+    digitalWrite(SALT_RELAY, RELAY_OFF);
+    Blynk.virtualWrite(VPIN_SALT_SWITCH, 0);
+    Blynk.virtualWrite(VPIN_SALT_STATUS, 0);
+  }
+}
+
+void checkCommunication()
+{
+  if(millis() - lastPacketTime > 5000)
+  {
+    digitalWrite(GOOD_RELAY, RELAY_OFF);
+    digitalWrite(SALT_RELAY, RELAY_OFF);
+
+    goodMotor = false;
+    saltMotor = false;
+
+    Blynk.virtualWrite(VPIN_GOOD_STATUS, 0);
+    Blynk.virtualWrite(VPIN_SALT_STATUS, 0);
+    Blynk.virtualWrite(VPIN_GOOD_SWITCH, 0);
+    Blynk.virtualWrite(VPIN_SALT_SWITCH, 0);
+  }
+}
+
+void reconnect()
+{
+  if(WiFi.status() != WL_CONNECTED)
+  {
+    WiFi.begin(ssid, pass);
+  }
+  if(!Blynk.connected())
+  {
+    Blynk.connect();
+  }
+}
+
+void loop()
+{
+  Blynk.run();
+  receiveLoRa();
+  autoControl();
+  manualSafetyControl();
+  checkCommunication();
+  reconnect();
+}
