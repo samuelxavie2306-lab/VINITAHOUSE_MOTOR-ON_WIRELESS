@@ -1,68 +1,141 @@
+/************************************************************
+ *              ESP32 LoRa TRANSMITTER
+ *
+ *  SALT FLOAT  -> GPIO32
+ *  GOOD FLOAT  -> GPIO33
+ *
+ *  HIGH = EMPTY
+ *  LOW  = FULL
+ *
+ *  LoRa:
+ *  NSS  -> GPIO5
+ *  RESET -> GPIO14
+ *  DIO0 -> GPIO2
+ *  SCK  -> GPIO18
+ *  MISO -> GPIO19
+ *  MOSI -> GPIO23
+ ************************************************************/
+
 #include <SPI.h>
 #include <LoRa.h>
 
-/************ LoRa Pins ************/
-#define LORA_SS   5
-#define LORA_RST  14
-#define LORA_DIO0 2
 
-/************ Float Switches ************/
-#define FLOAT_SALT 32   // Salt tank float
-#define FLOAT_GOOD 33   // Good tank float
+// ==================== LoRa Pins ====================
 
-// Function to read a stable value (debounce + filter)
-int readStable(int pin) {
-  int stableValue = digitalRead(pin);
-  int sameCount = 0;
+#define LORA_SS    5
+#define LORA_RST   14
+#define LORA_DIO0  2
 
-  // Check 20 samples over 100ms
-  for (int i = 0; i < 20; i++) {
-    int val = digitalRead(pin);
-    if (val == stableValue) {
-      sameCount++;
-    }
-    delay(5);
-  }
 
-  // If most samples agree, return that value
-  if (sameCount >= 15) {
-    return stableValue;
-  } else {
-    // Otherwise, re-read until stable
-    return digitalRead(pin);
-  }
-}
+// ==================== Float Pins ===================
 
-void setup() {
+#define FLOAT_SALT  32
+#define FLOAT_GOOD  33
+
+
+// ==================== Setup ========================
+
+void setup()
+{
   Serial.begin(115200);
+  delay(1000);
 
-  // Use internal pull-ups so open = HIGH, closed to GND = LOW
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("     LORA TRANSMITTER ESP32");
+  Serial.println("================================");
+
+
+  // Float switches
+  // Internal pull-up enabled
   pinMode(FLOAT_SALT, INPUT_PULLUP);
   pinMode(FLOAT_GOOD, INPUT_PULLUP);
 
-  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
-  if (!LoRa.begin(433E6)) {
-    Serial.println("LoRa init failed!");
-    while (1);
+
+  // LoRa pins
+  LoRa.setPins(
+    LORA_SS,
+    LORA_RST,
+    LORA_DIO0
+  );
+
+
+  // Start LoRa at 433 MHz
+  if (!LoRa.begin(433E6))
+  {
+    Serial.println("ERROR: LoRa initialization failed!");
+
+    while (true)
+    {
+      delay(1000);
+    }
   }
-  Serial.println("LoRa Transmitter Ready");
+
+
+  Serial.println("LoRa initialized successfully.");
+  Serial.println("Transmitter ready.");
+  Serial.println();
 }
 
-void loop() {
-  // Read float switches with debounce/filter
-  int saltState = readStable(FLOAT_SALT); // HIGH = Empty, LOW = Full
-  int goodState = readStable(FLOAT_GOOD); // HIGH = Empty, LOW = Full
 
-  // Send states as "salt,good"
+// ==================== Loop =========================
+
+void loop()
+{
+  // Read float switches
+
+  int saltState = digitalRead(FLOAT_SALT);
+  int goodState = digitalRead(FLOAT_GOOD);
+
+
+  // --------------------------------------------------
+  // Send data
+  //
+  // Format:
+  //
+  // Salt,Good
+  //
+  // 1,1 = Both EMPTY
+  // 0,1 = Salt FULL / Good EMPTY
+  // 1,0 = Salt EMPTY / Good FULL
+  // 0,0 = Both FULL
+  // --------------------------------------------------
+
   LoRa.beginPacket();
+
   LoRa.print(saltState);
   LoRa.print(",");
   LoRa.print(goodState);
+
   LoRa.endPacket();
 
-  // Debug output
-  Serial.print("Sent Salt: "); Serial.print(saltState);
-  Serial.print(" Good: "); Serial.println(goodState);
 
-  delay(500); // send every 0.5s
+  // ================= Serial Monitor ================
+
+  Serial.print("Salt Tank: ");
+
+  if (saltState == HIGH)
+  {
+    Serial.print("EMPTY");
+  }
+  else
+  {
+    Serial.print("FULL");
+  }
+
+
+  Serial.print("   |   Good Tank: ");
+
+  if (goodState == HIGH)
+  {
+    Serial.println("EMPTY");
+  }
+  else
+  {
+    Serial.println("FULL");
+  }
+
+
+  // Send every 1 second
+  delay(1000);
 }
