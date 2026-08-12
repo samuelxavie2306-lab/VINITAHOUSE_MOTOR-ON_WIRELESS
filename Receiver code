@@ -1,158 +1,659 @@
-#define BLYNK_TEMPLATE_ID "TMPL3-Bzx3_Rl"
-#define BLYNK_TEMPLATE_NAME "MOTOR CONTROL"
-#define BLYNK_AUTH_TOKEN "F-kF0mi9Kbbqb8-fs6wyxEa9NVMEpYEt"
+/************************************************************
+ *                ESP32 LoRa RECEIVER
+ *
+ *  BLYNK:
+ *
+ *  V1 = Salt Water Motor
+ *  V2 = Good Water Motor
+ *  V3 = Manual / Auto
+ *
+ *  MODE:
+ *
+ *  V3 = 0 -> MANUAL
+ *  V3 = 1 -> AUTO
+ *
+ *
+ *  RELAYS:
+ *
+ *  GPIO27 -> Salt Motor
+ *  GPIO26 -> Good Motor
+ *
+ *  RELAY LOGIC:
+ *
+ *  LOW  = ON
+ *  HIGH = OFF
+ *
+ *
+ *  FLOAT LOGIC:
+ *
+ *  HIGH = EMPTY
+ *  LOW  = FULL
+ *
+ *
+ *  SAFETY:
+ *
+ *  If LoRa communication is lost,
+ *  both motors are turned OFF.
+ ************************************************************/
+
+
+// ==================== BLYNK ========================
+
+#define BLYNK_TEMPLATE_ID "TMPL3QR7-Ud9n"
+#define BLYNK_TEMPLATE_NAME "LORA WATER CONTROL"
+#define BLYNK_AUTH_TOKEN "K_XiK_yfPGINCecmKiQ3HsmsuvczJC3v"
+
+
+// ==================== Libraries ====================
 
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
 #include <SPI.h>
 #include <LoRa.h>
 
-/************ WIFI ************/
+
+// ==================== Wi-Fi ========================
+
 char ssid[] = "Airtel_Sanjay_Pravin";
 char pass[] = "Fantastic@4321";
 
-/************ LoRa Pins ************/
-#define LORA_SS   5
-#define LORA_RST  14
-#define LORA_DIO0 2
 
-/************ Relay Pins (Active LOW) ************/
-#define RELAY_SALT 27
-#define RELAY_GOOD 26
+// ==================== LoRa Pins ====================
 
-/************ State ************/
-int saltMotor = 0;
-int goodMotor = 0;
-int mode = 0; // 0 = Manual, 1 = Auto
+#define LORA_SS    5
+#define LORA_RST   14
+#define LORA_DIO0  2
 
-// Latest float states from transmitter
+
+// ==================== Relay Pins ==================
+
+#define RELAY_SALT  27
+#define RELAY_GOOD  26
+
+
+// ==================== Motor States ================
+
+bool saltMotor = false;
+bool goodMotor = false;
+
+
+// ==================== Mode ========================
+
+// 0 = Manual
+// 1 = Auto
+
+bool autoMode = false;
+
+
+// ==================== Float States =================
+
+// HIGH = EMPTY
+// LOW  = FULL
+
 int saltState = HIGH;
 int goodState = HIGH;
 
-/************ BLYNK ************/
-// Salt Motor manual override
-BLYNK_WRITE(V1) {
-  if (mode == 0) { // Manual mode
-    int cmd = param.asInt();
-    if (cmd == 1) {
-      if (saltState == HIGH) { // Empty → allow ON
-        saltMotor = 1;
-        digitalWrite(RELAY_SALT, LOW);
-        Serial.println("Salt motor turned ON (manual)");
-      } else { // Full → block ON
-        saltMotor = 0;
-        digitalWrite(RELAY_SALT, HIGH);
-        Blynk.virtualWrite(V1, 0);
-        Serial.println("Salt motor blocked: tank full (manual)");
-      }
-    } else { // OFF command
-      saltMotor = 0;
-      digitalWrite(RELAY_SALT, HIGH);
-      Serial.println("Salt motor turned OFF (manual)");
-    }
+
+// ==================== LoRa Timeout =================
+
+// If no LoRa packet is received within this time,
+// both motors are turned OFF.
+
+unsigned long lastLoRaPacket = 0;
+
+const unsigned long LORA_TIMEOUT = 5000;
+
+
+// ====================================================
+// SALT MOTOR ON
+// ====================================================
+
+void saltMotorON()
+{
+  if (!saltMotor)
+  {
+    digitalWrite(RELAY_SALT, LOW);
+
+    saltMotor = true;
+
+    Serial.println("SALT MOTOR -> ON");
+
+    Blynk.virtualWrite(V1, 1);
   }
 }
 
-// Good Motor manual override
-BLYNK_WRITE(V2) {
-  if (mode == 0) { // Manual mode
-    int cmd = param.asInt();
-    if (cmd == 1) {
-      if (goodState == HIGH) { // Empty → allow ON
-        goodMotor = 1;
-        digitalWrite(RELAY_GOOD, LOW);
-        Serial.println("Good motor turned ON (manual)");
-      } else { // Full → block ON
-        goodMotor = 0;
-        digitalWrite(RELAY_GOOD, HIGH);
-        Blynk.virtualWrite(V2, 0);
-        Serial.println("Good motor blocked: tank full (manual)");
-      }
-    } else { // OFF command
-      goodMotor = 0;
-      digitalWrite(RELAY_GOOD, HIGH);
-      Serial.println("Good motor turned OFF (manual)");
-    }
+
+// ====================================================
+// SALT MOTOR OFF
+// ====================================================
+
+void saltMotorOFF()
+{
+  if (saltMotor)
+  {
+    digitalWrite(RELAY_SALT, HIGH);
+
+    saltMotor = false;
+
+    Serial.println("SALT MOTOR -> OFF");
+
+    Blynk.virtualWrite(V1, 0);
+  }
+  else
+  {
+    digitalWrite(RELAY_SALT, HIGH);
   }
 }
 
-// Mode switch
-BLYNK_WRITE(V3) {
-  mode = param.asInt(); // 0 = Manual, 1 = Auto
-  Serial.print("Mode changed to: ");
-  Serial.println(mode == 0 ? "Manual" : "Auto");
+
+// ====================================================
+// GOOD MOTOR ON
+// ====================================================
+
+void goodMotorON()
+{
+  if (!goodMotor)
+  {
+    digitalWrite(RELAY_GOOD, LOW);
+
+    goodMotor = true;
+
+    Serial.println("GOOD MOTOR -> ON");
+
+    Blynk.virtualWrite(V2, 1);
+  }
 }
 
-void setup() {
+
+// ====================================================
+// GOOD MOTOR OFF
+// ====================================================
+
+void goodMotorOFF()
+{
+  if (goodMotor)
+  {
+    digitalWrite(RELAY_GOOD, HIGH);
+
+    goodMotor = false;
+
+    Serial.println("GOOD MOTOR -> OFF");
+
+    Blynk.virtualWrite(V2, 0);
+  }
+  else
+  {
+    digitalWrite(RELAY_GOOD, HIGH);
+  }
+}
+
+
+// ====================================================
+// BLYNK V1
+// SALT MOTOR
+// ====================================================
+
+BLYNK_WRITE(V1)
+{
+  int command = param.asInt();
+
+  // Ignore manual command in AUTO mode
+  if (autoMode)
+  {
+    return;
+  }
+
+
+  // User wants motor ON
+  if (command == 1)
+  {
+    // Check tank status
+
+    if (saltState == HIGH)
+    {
+      // Tank EMPTY
+      saltMotorON();
+
+      Serial.println("Manual: Salt motor ON");
+    }
+    else
+    {
+      // Tank FULL
+      saltMotorOFF();
+
+      Blynk.virtualWrite(V1, 0);
+
+      Serial.println(
+        "Manual: Salt motor BLOCKED - tank FULL"
+      );
+    }
+  }
+
+
+  // User wants motor OFF
+  else
+  {
+    saltMotorOFF();
+
+    Serial.println("Manual: Salt motor OFF");
+  }
+}
+
+
+// ====================================================
+// BLYNK V2
+// GOOD MOTOR
+// ====================================================
+
+BLYNK_WRITE(V2)
+{
+  int command = param.asInt();
+
+  // Ignore manual command in AUTO mode
+  if (autoMode)
+  {
+    return;
+  }
+
+
+  // User wants motor ON
+  if (command == 1)
+  {
+    // Check tank status
+
+    if (goodState == HIGH)
+    {
+      // Tank EMPTY
+      goodMotorON();
+
+      Serial.println("Manual: Good motor ON");
+    }
+    else
+    {
+      // Tank FULL
+      goodMotorOFF();
+
+      Blynk.virtualWrite(V2, 0);
+
+      Serial.println(
+        "Manual: Good motor BLOCKED - tank FULL"
+      );
+    }
+  }
+
+
+  // User wants motor OFF
+  else
+  {
+    goodMotorOFF();
+
+    Serial.println("Manual: Good motor OFF");
+  }
+}
+
+
+// ====================================================
+// BLYNK V3
+// MANUAL / AUTO
+// ====================================================
+
+BLYNK_WRITE(V3)
+{
+  int command = param.asInt();
+
+  if (command == 1)
+  {
+    autoMode = true;
+
+    Serial.println();
+    Serial.println("==============================");
+    Serial.println("MODE: AUTO");
+    Serial.println("==============================");
+
+
+    // Immediately apply current tank status
+
+    if (saltState == HIGH)
+    {
+      saltMotorON();
+    }
+    else
+    {
+      saltMotorOFF();
+    }
+
+
+    if (goodState == HIGH)
+    {
+      goodMotorON();
+    }
+    else
+    {
+      goodMotorOFF();
+    }
+  }
+
+  else
+  {
+    autoMode = false;
+
+    Serial.println();
+    Serial.println("==============================");
+    Serial.println("MODE: MANUAL");
+    Serial.println("==============================");
+
+    /*
+     * Motor state is not automatically changed here.
+     *
+     * Blynk V1 and V2 will control the motors.
+     *
+     * Float safety remains active.
+     */
+  }
+}
+
+
+// ====================================================
+// AUTO CONTROL
+// ====================================================
+
+void autoControl()
+{
+  // ================= SALT =================
+
+  if (saltState == HIGH)
+  {
+    // EMPTY
+
+    saltMotorON();
+  }
+  else
+  {
+    // FULL
+
+    saltMotorOFF();
+  }
+
+
+  // ================= GOOD =================
+
+  if (goodState == HIGH)
+  {
+    // EMPTY
+
+    goodMotorON();
+  }
+  else
+  {
+    // FULL
+
+    goodMotorOFF();
+  }
+}
+
+
+// ====================================================
+// MANUAL SAFETY
+// ====================================================
+
+void manualSafety()
+{
+  // Salt tank became FULL
+
+  if (saltMotor && saltState == LOW)
+  {
+    Serial.println(
+      "SAFETY: Salt tank FULL"
+    );
+
+    saltMotorOFF();
+  }
+
+
+  // Good tank became FULL
+
+  if (goodMotor && goodState == LOW)
+  {
+    Serial.println(
+      "SAFETY: Good tank FULL"
+    );
+
+    goodMotorOFF();
+  }
+}
+
+
+// ====================================================
+// SETUP
+// ====================================================
+
+void setup()
+{
   Serial.begin(115200);
+
+  delay(1000);
+
+
+  Serial.println();
+  Serial.println("====================================");
+  Serial.println("       LORA WATER CONTROL");
+  Serial.println("       ESP32 RECEIVER");
+  Serial.println("====================================");
+
+
+  // ================= RELAYS =================
 
   pinMode(RELAY_SALT, OUTPUT);
   pinMode(RELAY_GOOD, OUTPUT);
+
+
+  // IMPORTANT:
+  // Active LOW relay
+  // HIGH = OFF
+
   digitalWrite(RELAY_SALT, HIGH);
   digitalWrite(RELAY_GOOD, HIGH);
 
-  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
 
-  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
-  if (!LoRa.begin(433E6)) {
-    Serial.println("LoRa init failed!");
-    while (1);
+  // ================= BLYNK =================
+
+  Serial.println("Connecting to Wi-Fi / Blynk...");
+
+  Blynk.begin(
+    BLYNK_AUTH_TOKEN,
+    ssid,
+    pass
+  );
+
+  Serial.println("Blynk connected.");
+
+
+  // ================= LoRa ==================
+
+  LoRa.setPins(
+    LORA_SS,
+    LORA_RST,
+    LORA_DIO0
+  );
+
+
+  if (!LoRa.begin(433E6))
+  {
+    Serial.println(
+      "ERROR: LoRa initialization failed!"
+    );
+
+    while (true)
+    {
+      delay(1000);
+    }
   }
-  Serial.println("LoRa Receiver Ready");
+
+
+  Serial.println("LoRa initialized successfully.");
+  Serial.println("Receiver ready.");
+  Serial.println();
+
+
+  // Start timeout timer
+
+  lastLoRaPacket = millis();
 }
 
-void loop() {
+
+// ====================================================
+// LOOP
+// ====================================================
+
+void loop()
+{
+  // ================= BLYNK =================
+
   Blynk.run();
 
+
+  // ================= LoRa ==================
+
   int packetSize = LoRa.parsePacket();
-  if (packetSize) {
+
+
+  if (packetSize)
+  {
     String incoming = "";
-    while (LoRa.available()) incoming += (char)LoRa.read();
 
-    int commaIndex = incoming.indexOf(',');
-    saltState = incoming.substring(0, commaIndex).toInt();
-    goodState = incoming.substring(commaIndex + 1).toInt();
 
-    Serial.print("Received Salt: "); Serial.print(saltState);
-    Serial.print(" Good: "); Serial.println(goodState);
+    // Read packet
 
-    // ---- AUTO MODE ----
-    if (mode == 1) {
-      if (saltState == HIGH) { // Empty → ON
-        digitalWrite(RELAY_SALT, LOW);
-        saltMotor = 1;
-        Blynk.virtualWrite(V1, 1);
-      } else { // Full → OFF
-        digitalWrite(RELAY_SALT, HIGH);
-        saltMotor = 0;
-        Blynk.virtualWrite(V1, 0);
-      }
-
-      if (goodState == HIGH) { // Empty → ON
-        digitalWrite(RELAY_GOOD, LOW);
-        goodMotor = 1;
-        Blynk.virtualWrite(V2, 1);
-      } else { // Full → OFF
-        digitalWrite(RELAY_GOOD, HIGH);
-        goodMotor = 0;
-        Blynk.virtualWrite(V2, 0);
-      }
+    while (LoRa.available())
+    {
+      incoming += (char)LoRa.read();
     }
 
-    // ---- MANUAL MODE AUTO-OFF ----
-    if (mode == 0) {
-      if (saltMotor == 1 && saltState == LOW) {
-        digitalWrite(RELAY_SALT, HIGH);
-        saltMotor = 0;
-        Blynk.virtualWrite(V1, 0);
-        Serial.println("Salt motor stopped automatically: tank full (manual)");
+
+    Serial.print("LoRa Received: ");
+    Serial.println(incoming);
+
+
+    // Find comma
+
+    int commaIndex = incoming.indexOf(',');
+
+
+    // Check packet format
+
+    if (commaIndex > 0)
+    {
+      int newSaltState =
+        incoming.substring(
+          0,
+          commaIndex
+        ).toInt();
+
+
+      int newGoodState =
+        incoming.substring(
+          commaIndex + 1
+        ).toInt();
+
+
+      // Make sure values are valid
+
+      if (
+        (newSaltState == HIGH ||
+         newSaltState == LOW) &&
+
+        (newGoodState == HIGH ||
+         newGoodState == LOW)
+      )
+      {
+        // Update states
+
+        saltState = newSaltState;
+        goodState = newGoodState;
+
+
+        // Reset LoRa timeout
+
+        lastLoRaPacket = millis();
+
+
+        // ================= STATUS =================
+
+        Serial.print("Salt Tank: ");
+
+        if (saltState == HIGH)
+        {
+          Serial.println("EMPTY");
+        }
+        else
+        {
+          Serial.println("FULL");
+        }
+
+
+        Serial.print("Good Tank: ");
+
+        if (goodState == HIGH)
+        {
+          Serial.println("EMPTY");
+        }
+        else
+        {
+          Serial.println("FULL");
+        }
+
+
+        // ================= MOTOR CONTROL ==========
+
+        if (autoMode)
+        {
+          autoControl();
+        }
+        else
+        {
+          manualSafety();
+        }
       }
-      if (goodMotor == 1 && goodState == LOW) {
-        digitalWrite(RELAY_GOOD, HIGH);
-        goodMotor = 0;
-        Blynk.virtualWrite(V2, 0);
-        Serial.println("Good motor stopped automatically: tank full (manual)");
+      else
+      {
+        Serial.println(
+          "Invalid float data received."
+        );
       }
+    }
+    else
+    {
+      Serial.println(
+        "Invalid LoRa packet."
+      );
+    }
+  }
+
+
+  // ==================================================
+  // LoRa COMMUNICATION SAFETY
+  // ==================================================
+
+  if (
+    millis() - lastLoRaPacket >
+    LORA_TIMEOUT
+  )
+  {
+    // Only turn motors off if currently running
+
+    if (saltMotor || goodMotor)
+    {
+      Serial.println();
+      Serial.println(
+        "WARNING: LoRa communication lost!"
+      );
+
+      Serial.println(
+        "Turning BOTH motors OFF."
+      );
+
+      saltMotorOFF();
+      goodMotorOFF();
     }
   }
 }
